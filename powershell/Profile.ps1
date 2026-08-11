@@ -3,33 +3,50 @@
 # ===========================
 
 # ---------------------------
-# PowerToys Command Not Found
+# Cache Helper (Speeds up startup significantly)
 # ---------------------------
-if (Get-Module -ListAvailable -Name Microsoft.WinGet.CommandNotFound) {
-    Import-Module Microsoft.WinGet.CommandNotFound
+ $psCacheDir = "$HOME\.ps_cache"
+if (-not (Test-Path $psCacheDir)) {
+    New-Item -ItemType Directory -Path $psCacheDir -Force | Out-Null
+}
+
+function Invoke-CachedInit {
+    param(
+        [string]$Name,
+        [scriptblock]$Generator
+    )
+    $cacheFile = Join-Path $psCacheDir "$Name.ps1"
+    
+    # Generate cache if missing
+    if (-not (Test-Path $cacheFile)) {
+        & $Generator | Out-File $cacheFile -Encoding utf8
+    }
+    . $cacheFile
+}
+
+function Update-ProfileCache {
+    Remove-Item "$psCacheDir\*.ps1" -Force -ErrorAction SilentlyContinue
+    Write-Host "Profile cache cleared. Restart your shell to regenerate." -ForegroundColor Green
 }
 
 # ---------------------------
 # PSReadLine
 # ---------------------------
-if (Get-Module -ListAvailable -Name PSReadLine) {
-    Import-Module PSReadLine
+# PSReadLine is auto-loaded by PowerShell 7, so we skip the Get-Module check.
+Set-PSReadLineOption -PredictionSource HistoryAndPlugin
+Set-PSReadLineOption -PredictionViewStyle ListView
+Set-PSReadLineOption -HistoryNoDuplicates
+Set-PSReadLineOption -BellStyle None
+Set-PSReadLineOption -HistorySearchCursorMovesToEnd
 
-    Set-PSReadLineOption -PredictionSource HistoryAndPlugin
-    Set-PSReadLineOption -PredictionViewStyle ListView
-    Set-PSReadLineOption -HistoryNoDuplicates
-    Set-PSReadLineOption -BellStyle None
-    Set-PSReadLineOption -HistorySearchCursorMovesToEnd
+# Vim-style navigation in ListView
+Set-PSReadLineKeyHandler -Chord Ctrl+j -Function NextSuggestion
+Set-PSReadLineKeyHandler -Chord Ctrl+k -Function PreviousSuggestion
+Set-PSReadLineKeyHandler -Chord Ctrl+Backspace -Function BackwardKillWord
+Set-PSReadLineKeyHandler -Key Tab -Function MenuComplete
 
-    # Vim-style navigation in ListView
-    Set-PSReadLineKeyHandler -Chord Ctrl+j -Function NextSuggestion
-    Set-PSReadLineKeyHandler -Chord Ctrl+k -Function PreviousSuggestion
-    Set-PSReadLineKeyHandler -Chord Ctrl+Backspace -Function BackwardKillWord
-    Set-PSReadLineKeyHandler -Key Tab -Function MenuComplete
-
-    Set-PSReadLineOption -Colors @{
-        Selection = "`e[7m"
-    }
+Set-PSReadLineOption -Colors @{
+    Selection = "`e[7m"
 }
 
 # ---------------------------
@@ -41,29 +58,21 @@ if (Get-Module -ListAvailable -Name PSFzf) {
 }
 
 # ---------------------------
-# Carapace
-# ---------------------------
-if (Get-Command carapace -ErrorAction SilentlyContinue) {
-    $env:CARAPACE_BRIDGES = 'zsh,fish,bash,inshellisense'
-    carapace _carapace powershell | Out-String | Invoke-Expression
-}
-
-# ---------------------------
-# Starship
+# Starship (Cached Init)
 # ---------------------------
 if (Get-Command starship -ErrorAction SilentlyContinue) {
-    Invoke-Expression (& starship init powershell)
+    Invoke-CachedInit -Name "starship" -Generator { starship init powershell }
 }
 
 # ---------------------------
-# zoxide
+# zoxide (Cached Init)
 # ---------------------------
 if (Get-Command zoxide -ErrorAction SilentlyContinue) {
-    Invoke-Expression (& zoxide init powershell --cmd cd | Out-String)
+    Invoke-CachedInit -Name "zoxide" -Generator { zoxide init powershell --cmd cd }
 }
 
 # ---------------------------
-# mise
+# mise (Full Activation)
 # ---------------------------
 if (Get-Command mise -ErrorAction SilentlyContinue) {
     mise activate pwsh | Out-String | Invoke-Expression
@@ -81,9 +90,8 @@ if (Get-Command mise -ErrorAction SilentlyContinue) {
 # Plugins
 # ===========================
 
-if (Get-Module -ListAvailable -Name git-aliases) {
-    Import-Module git-aliases -DisableNameChecking
-}
+# Optimized: Direct import is faster than Get-Module -ListAvailable
+Import-Module git-aliases -ErrorAction SilentlyContinue -DisableNameChecking
 
 # ===========================
 # Aliases
@@ -93,6 +101,7 @@ if (Get-Module -ListAvailable -Name git-aliases) {
 Set-Alias cat bat
 Set-Alias vim nvim
 Set-Alias btop btop4win
+Set-Alias msvc Enter-MSVC
 
 # Winget
 Set-Alias wi winget-install
@@ -163,3 +172,21 @@ function wslh { wsl -d archlinux --cd /home/zeroarch }
 # ---------------------------
 function gh-private { gh repo create --private --source=. --remote=origin --push }
 function gh-public { gh repo create --public --source=. --remote=origin --push }
+
+# ---------------------------
+# MSVC / Visual Studio Build Tools
+# ---------------------------
+# LAZY LOADED: Run 'msvc' manually when you need to compile C/C++.
+function Enter-MSVC {
+    if ($env:VSCMD_VER) { return }
+    $vsDevCmd = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\2022\BuildTools\Common7\Tools\VsDevCmd.bat"
+    if (-not (Test-Path $vsDevCmd)) { return }
+    & $env:ComSpec /s /c "`"$vsDevCmd`" -no_logo -arch=amd64 -host_arch=amd64 && set" |
+        ForEach-Object {
+            if ($_ -match "=") {
+                $name, $value = $_ -split "=", 2
+                Set-Item -Path "Env:$name" -Value $value
+            }
+        }
+}
+
